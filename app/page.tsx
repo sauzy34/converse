@@ -1,64 +1,98 @@
-import Image from "next/image";
+"use client";
+
+import Conversation, {
+  ConversationContent,
+  ConversationScrollButton,
+} from "@/components/ai/conversation";
+import Message, { MessageContent } from "@/components/ai/message";
+import {
+  PromptInput,
+  PromptInputActionAddAttachments,
+  PromptInputActionMenu,
+  PromptInputActionMenuContent,
+  PromptInputActionMenuTrigger,
+  PromptInputAttachment,
+  PromptInputAttachments,
+  PromptInputBody,
+  PromptInputFooter,
+  PromptInputMessage,
+  PromptInputSubmit,
+  PromptInputSubmitProps,
+  PromptInputTextarea,
+  PromptInputTools,
+} from "@/components/ai/prompt-input";
+import { useState } from "react";
+import { ollama } from "ai-sdk-ollama";
+import { generateText } from "ai";
 
 export default function Home() {
+  const [inputStatus, setInputStatus] =
+    useState<PromptInputSubmitProps["status"]>("ready");
+  const [messages, setMessages] = useState<
+    { from: "user" | "assistant"; id: string; text: string }[]
+  >([]);
+
+  const handleSubmit = async (message: PromptInputMessage) => {
+    setInputStatus("submitted");
+    setMessages((prev) => [
+      ...prev,
+      {
+        from: "user",
+        id: Math.random().toString(),
+        text: message.text,
+      },
+    ]);
+    const { response, text } = await generateText({
+      model: ollama("phi3"),
+      prompt: message.text,
+      temperature: 0.8,
+      system: "You are a helpful assistant",
+    });
+    console.log({ response });
+
+    setMessages((prev) => [
+      ...prev,
+      {
+        from: "assistant",
+        id: response.id,
+        text,
+      },
+    ]);
+    setInputStatus("ready");
+  };
+
   return (
     <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
+      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-4 px-8 bg-white dark:bg-black sm:items-start">
+        <Conversation className="relative size-full p-4">
+          <ConversationContent>
+            {messages.map((msg) => (
+              <Message from={msg?.from} key={msg?.id}>
+                <MessageContent>{msg.text}</MessageContent>
+              </Message>
+            ))}
+          </ConversationContent>
+          <ConversationScrollButton />
+        </Conversation>
+        <PromptInput onSubmit={handleSubmit}>
+          <PromptInputAttachments>
+            {(attachment) => <PromptInputAttachment data={attachment} />}
+          </PromptInputAttachments>
+          <PromptInputBody>
+            <PromptInputTextarea />
+          </PromptInputBody>
+          <PromptInputFooter>
+            <PromptInputTools>
+              <PromptInputActionMenu>
+                <PromptInputActionMenuTrigger />
+                <PromptInputActionMenuContent>
+                  <PromptInputActionAddAttachments />
+                </PromptInputActionMenuContent>
+              </PromptInputActionMenu>
+            </PromptInputTools>
+            <PromptInputSubmit status={inputStatus} />
+          </PromptInputFooter>
+        </PromptInput>
       </main>
     </div>
   );
