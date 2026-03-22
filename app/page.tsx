@@ -22,78 +22,99 @@ import {
   PromptInputTools,
 } from "@/components/ai/prompt-input";
 import { useState } from "react";
-import { ollama } from "ai-sdk-ollama";
-import { generateText } from "ai";
+import ollama, { type Message as OMessage } from "ollama/browser";
+
+interface ExtendedMessage extends OMessage {
+  id: string;
+  role: "user" | "assistant" | "system";
+}
 
 export default function Home() {
   const [inputStatus, setInputStatus] =
     useState<PromptInputSubmitProps["status"]>("ready");
-  const [messages, setMessages] = useState<
-    { from: "user" | "assistant"; id: string; text: string }[]
-  >([]);
+  const [messages, setMessages] = useState<ExtendedMessage[]>([]);
 
   const handleSubmit = async (message: PromptInputMessage) => {
-    setInputStatus("submitted");
-    setMessages((prev) => [
-      ...prev,
-      {
-        from: "user",
-        id: Math.random().toString(),
-        text: message.text,
-      },
-    ]);
-    const { response, text } = await generateText({
-      model: ollama("phi3"),
-      prompt: message.text,
-      temperature: 0.8,
-      system: "You are a helpful assistant",
-    });
-    console.log({ response });
+    const userId = crypto.randomUUID();
+
+    setInputStatus("streaming");
 
     setMessages((prev) => [
       ...prev,
       {
-        from: "assistant",
-        id: response.id,
-        text,
+        role: "user",
+        id: userId,
+        content: message.text,
       },
     ]);
-    setInputStatus("ready");
+
+    const assistantId = crypto.randomUUID();
+    setMessages((prev) => [
+      ...prev,
+      { role: "assistant", id: assistantId, content: "" },
+    ]);
+
+    try {
+      const response = await ollama.chat({
+        model: "phi3",
+        messages: [
+          { role: "system", content: "You are a helpful assistant" },
+          { role: "user", content: message.text },
+        ],
+        stream: true,
+        options: {
+          temperature: 0.8,
+        },
+      });
+
+      for await (const part of response) {
+        const delta = part.message?.content ?? "";
+
+        if (!delta) continue;
+        setMessages((prev) =>
+          prev.map((m) => {
+            return m.id === assistantId
+              ? { ...m, content: m.content + delta }
+              : m;
+          }),
+        );
+      }
+    } finally {
+      setInputStatus("ready");
+    }
   };
 
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-4 px-8 bg-white dark:bg-black sm:items-start">
-        <Conversation className="relative size-full p-4">
-          <ConversationContent>
-            {messages.map((msg) => (
-              <Message from={msg?.from} key={msg?.id}>
-                <MessageContent>{msg.text}</MessageContent>
-              </Message>
-            ))}
-          </ConversationContent>
-          <ConversationScrollButton />
-        </Conversation>
-        <PromptInput onSubmit={handleSubmit}>
-          <PromptInputAttachments>
-            {(attachment) => <PromptInputAttachment data={attachment} />}
-          </PromptInputAttachments>
-          <PromptInputBody>
-            <PromptInputTextarea />
-          </PromptInputBody>
-          <PromptInputFooter>
-            <PromptInputTools>
-              <PromptInputActionMenu>
-                <PromptInputActionMenuTrigger />
-                <PromptInputActionMenuContent>
-                  <PromptInputActionAddAttachments />
-                </PromptInputActionMenuContent>
-              </PromptInputActionMenu>
-            </PromptInputTools>
-            <PromptInputSubmit status={inputStatus} />
-          </PromptInputFooter>
-        </PromptInput>
-      </main>
+    <div className="fixed inset-0 flex flex-col overflow-hidden px-4">
+      <Conversation className="relative size-full p-4">
+        <ConversationContent>
+          {messages.map((msg) => (
+            <Message from={msg?.role} key={msg?.id}>
+              <MessageContent>{msg.content}</MessageContent>
+            </Message>
+          ))}
+        </ConversationContent>
+        <ConversationScrollButton />
+      </Conversation>
+      <PromptInput onSubmit={handleSubmit}>
+        <PromptInputAttachments>
+          {(attachment) => <PromptInputAttachment data={attachment} />}
+        </PromptInputAttachments>
+        <PromptInputBody>
+          <PromptInputTextarea />
+        </PromptInputBody>
+        <PromptInputFooter>
+          <PromptInputTools>
+            <PromptInputActionMenu>
+              <PromptInputActionMenuTrigger />
+              <PromptInputActionMenuContent>
+                <PromptInputActionAddAttachments />
+              </PromptInputActionMenuContent>
+            </PromptInputActionMenu>
+          </PromptInputTools>
+          <PromptInputSubmit status={inputStatus} />
+        </PromptInputFooter>
+      </PromptInput>
     </div>
   );
 }
