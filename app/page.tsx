@@ -23,11 +23,14 @@ import {
 } from "@/components/ai/prompt-input";
 import { useState } from "react";
 import ollama, { type Message as OMessage } from "ollama/browser";
+import { truncateHistory } from "@/utils/truncateHistory";
 
-interface ExtendedMessage extends OMessage {
+export interface ExtendedMessage extends OMessage {
   id: string;
   role: "user" | "assistant" | "system";
 }
+
+const MAX_TOKENS = 700;
 
 export default function Home() {
   const [inputStatus, setInputStatus] =
@@ -54,17 +57,20 @@ export default function Home() {
       { role: "assistant", id: assistantId, content: "" },
     ]);
 
+    const filteredMessages = truncateHistory(messages, MAX_TOKENS);
+
     try {
       const response = await ollama.chat({
         model: "phi3",
         messages: [
           { role: "system", content: "You are a helpful assistant" },
-          ...messages,
+          ...filteredMessages,
           { role: "user", content: message.text },
         ],
         stream: true,
         options: {
           temperature: 0.8,
+          num_predict: 200,
         },
       });
 
