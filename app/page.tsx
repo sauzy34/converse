@@ -27,10 +27,30 @@ import { truncateHistory } from "@/utils/truncateHistory";
 
 export interface ExtendedMessage extends OMessage {
   id: string;
-  role: "user" | "assistant" | "system";
+  role: "user" | "assistant" | "system" | "tool";
 }
 
 const MAX_TOKENS = 700;
+
+function addTwoNumbers(a: number, b: number) {
+  return a + b;
+}
+
+const addTool = {
+  type: "function",
+  function: {
+    name: "addTwoNumbers",
+    description: "Add two numbers together",
+    parameters: {
+      type: "object",
+      required: ["a", "b"],
+      properties: {
+        a: { type: "number", description: "The first number" },
+        b: { type: "number", description: "The second number" },
+      },
+    },
+  },
+};
 
 export default function Home() {
   const [inputStatus, setInputStatus] =
@@ -61,7 +81,7 @@ export default function Home() {
 
     try {
       const response = await ollama.chat({
-        model: "phi3",
+        model: "qwen3",
         messages: [
           { role: "system", content: "You are a helpful assistant" },
           ...filteredMessages,
@@ -72,20 +92,39 @@ export default function Home() {
           temperature: 0.8,
           num_predict: 200,
         },
+        tools: [addTool],
       });
-
       for await (const part of response) {
-        const delta = part.message?.content ?? "";
+        const toolCalls = part.message.tool_calls;
+        if (toolCalls) {
+          for (const tool of toolCalls) {
+            setMessages((prev) => [
+              ...prev,
+              {
+                role: "tool",
+                id: assistantId,
+                content: addTwoNumbers(
+                  tool.function.arguments.a,
+                  tool.function.arguments.b,
+                ).toString(),
+              },
+            ]);
+          }
+        } else {
+          const delta = part.message?.content ?? "";
 
-        if (!delta) continue;
-        setMessages((prev) =>
-          prev.map((m) => {
-            return m.id === assistantId
-              ? { ...m, content: m.content + delta }
-              : m;
-          }),
-        );
+          if (!delta) continue;
+          setMessages((prev) =>
+            prev.map((m) => {
+              return m.id === assistantId
+                ? { ...m, content: m.content + delta }
+                : m;
+            }),
+          );
+        }
       }
+    } catch (err) {
+      console.error({ err });
     } finally {
       setInputStatus("ready");
     }
