@@ -59,6 +59,7 @@ export default function Home() {
         model: "phi3",
         messages: [
           { role: "system", content: "You are a helpful assistant" },
+          ...messages,
           { role: "user", content: message.text },
         ],
         stream: true,
