@@ -22,7 +22,7 @@ import {
   PromptInputTools,
 } from "@/components/ai/prompt-input";
 import { useState } from "react";
-import ollama, { type Message as OMessage } from "ollama/browser";
+import ollama, { Tool, type Message as OMessage } from "ollama/browser";
 import { truncateHistory } from "@/utils/truncateHistory";
 
 export interface ExtendedMessage extends OMessage {
@@ -40,6 +40,16 @@ function subTwoNumbers(a: number, b: number) {
   return a - b;
 }
 
+async function getGithubReposUrl({ username }: { username: string }) {
+  console.log({ username });
+  const res = await fetch(
+    `https://api.github.com/users/${username}/repos?per_page=100&page=1`,
+  );
+  const repos = await res.json();
+  console.log({ urls: repos.map((r: any) => r.html_url) });
+  return repos.map((r: any) => r.html_url);
+}
+
 const addTool = {
   type: "function",
   function: {
@@ -54,7 +64,7 @@ const addTool = {
       },
     },
   },
-};
+} satisfies Tool;
 
 const subTool = {
   type: "function",
@@ -70,17 +80,34 @@ const subTool = {
       },
     },
   },
-};
+} satisfies Tool;
+
+const githubTool = {
+  type: "function",
+  function: {
+    name: "getGithubReposUrl",
+    description: "Fetch user's all public github urls",
+    parameters: {
+      type: "object",
+      required: ["username"],
+      properties: {
+        username: { type: "string", description: "Github username" },
+      },
+    },
+  },
+} satisfies Tool;
 
 const TOOL_REGISTRY = {
   addTwoNumbers,
   subTwoNumbers,
+  getGithubReposUrl,
 } as const;
 
 export default function Home() {
   const [inputStatus, setInputStatus] =
     useState<PromptInputSubmitProps["status"]>("ready");
   const [messages, setMessages] = useState<ExtendedMessage[]>([]);
+  const [toolMessages, setToolMessages] = useState<ExtendedMessage[]>([]);
 
   const handleSubmit = async (message: PromptInputMessage) => {
     const userId = crypto.randomUUID();
@@ -116,11 +143,11 @@ export default function Home() {
           temperature: 0.8,
           num_predict: 2000,
         },
-        tools: [addTool, subTool],
+        tools: [addTool, subTool, githubTool],
       });
 
       const toolCalls = initialResponse.message.tool_calls ?? [];
-
+      console.log({ toolCalls });
       if (toolCalls.length === 0) {
         const assistantContent = initialResponse.message.content ?? "";
         setMessages((prev) =>
@@ -133,74 +160,27 @@ export default function Home() {
         return;
       }
 
-      const toolMessages = toolCalls.reduce<ExtendedMessage[]>(
-        (accumulator, toolCall) => {
-          const toolName = toolCall.function.name as keyof typeof TOOL_REGISTRY;
-          const tool = TOOL_REGISTRY[toolName];
-          if (!tool) {
-            return accumulator;
-          }
+      for (const tool of toolCalls) {
+        console.log({ tool });
+        const fnName = tool.function.name;
+        const args = tool.function.arguments;
+        const impl = TOOL_REGISTRY[fnName];
+        console.log({ fnName, args });
 
-          const result = tool(
-            toolCall.function.arguments.a,
-            toolCall.function.arguments.b,
-          );
+        let toolResult = "Tool not implemented";
 
-          accumulator.push({
-            role: "tool",
-            id: crypto.randomUUID(),
-            tool_name: toolName,
-            content: String(result),
-          });
-
-          return accumulator;
-        },
-        [],
-      );
-
-      if (toolMessages.length === 0) {
+        if (impl) {
+          const result = await impl(args);
+          toolResult = JSON.stringify(result);
+        }
         setMessages((prev) =>
           prev.map((currentMessage) =>
             currentMessage.id === assistantId
-              ? {
-                  ...currentMessage,
-                  content: "I tried to call a tool, but none of the requested tools are available.",
-                }
+              ? { ...currentMessage, content: toolResult, role: "tool" }
               : currentMessage,
           ),
         );
-        return;
       }
-
-      setMessages((prev) => [...prev, ...toolMessages]);
-
-      const finalResponse = await ollama.chat({
-        model: "qwen3",
-        messages: [
-          { role: "system", content: "You are a helpful assistant" },
-          ...filteredMessages,
-          initialResponse.message,
-          ...toolMessages.map(({ role, content, tool_name }) => ({
-            role,
-            content,
-            tool_name,
-          })),
-        ],
-        stream: false,
-        options: {
-          temperature: 0.8,
-          num_predict: 2000,
-        },
-      });
-
-      const finalContent = finalResponse.message.content ?? "";
-      setMessages((prev) =>
-        prev.map((currentMessage) =>
-          currentMessage.id === assistantId
-            ? { ...currentMessage, content: finalContent }
-            : currentMessage,
-        ),
-      );
     } catch (err) {
       console.error({ err });
     } finally {
