@@ -30,10 +30,14 @@ export interface ExtendedMessage extends OMessage {
   role: "user" | "assistant" | "system" | "tool";
 }
 
-const MAX_TOKENS = 700;
+const MAX_TOKENS = 4000;
 
 function addTwoNumbers(a: number, b: number) {
   return a + b;
+}
+
+function subTwoNumbers(a: number, b: number) {
+  return a - b;
 }
 
 const addTool = {
@@ -52,6 +56,27 @@ const addTool = {
   },
 };
 
+const subTool = {
+  type: "function",
+  function: {
+    name: "subTwoNumbers",
+    description: "Subtract two numbers together",
+    parameters: {
+      type: "object",
+      required: ["a", "b"],
+      properties: {
+        a: { type: "number", description: "The first number" },
+        b: { type: "number", description: "The second number" },
+      },
+    },
+  },
+};
+
+const TOOL_REGISTRY = {
+  addTwoNumbers,
+  subTwoNumbers,
+} as const;
+
 export default function Home() {
   const [inputStatus, setInputStatus] =
     useState<PromptInputSubmitProps["status"]>("ready");
@@ -59,70 +84,123 @@ export default function Home() {
 
   const handleSubmit = async (message: PromptInputMessage) => {
     const userId = crypto.randomUUID();
+    const assistantId = crypto.randomUUID();
 
     setInputStatus("streaming");
 
-    setMessages((prev) => [
-      ...prev,
-      {
-        role: "user",
-        id: userId,
-        content: message.text,
-      },
-    ]);
+    const userMessage: ExtendedMessage = {
+      role: "user",
+      id: userId,
+      content: message.text,
+    };
+    const assistantMessage: ExtendedMessage = {
+      role: "assistant",
+      id: assistantId,
+      content: "",
+    };
 
-    const assistantId = crypto.randomUUID();
-    setMessages((prev) => [
-      ...prev,
-      { role: "assistant", id: assistantId, content: "" },
-    ]);
+    const nextMessages = [...messages, userMessage];
+    const filteredMessages = truncateHistory(nextMessages, MAX_TOKENS);
 
-    const filteredMessages = truncateHistory(messages, MAX_TOKENS);
+    setMessages((prev) => [...prev, userMessage, assistantMessage]);
 
     try {
-      const response = await ollama.chat({
+      const initialResponse = await ollama.chat({
         model: "qwen3",
         messages: [
           { role: "system", content: "You are a helpful assistant" },
           ...filteredMessages,
-          { role: "user", content: message.text },
         ],
-        stream: true,
+        stream: false,
         options: {
           temperature: 0.8,
-          num_predict: 200,
+          num_predict: 2000,
         },
-        tools: [addTool],
+        tools: [addTool, subTool],
       });
-      for await (const part of response) {
-        const toolCalls = part.message.tool_calls;
-        if (toolCalls) {
-          for (const tool of toolCalls) {
-            setMessages((prev) => [
-              ...prev,
-              {
-                role: "tool",
-                id: assistantId,
-                content: addTwoNumbers(
-                  tool.function.arguments.a,
-                  tool.function.arguments.b,
-                ).toString(),
-              },
-            ]);
-          }
-        } else {
-          const delta = part.message?.content ?? "";
 
-          if (!delta) continue;
-          setMessages((prev) =>
-            prev.map((m) => {
-              return m.id === assistantId
-                ? { ...m, content: m.content + delta }
-                : m;
-            }),
-          );
-        }
+      const toolCalls = initialResponse.message.tool_calls ?? [];
+
+      if (toolCalls.length === 0) {
+        const assistantContent = initialResponse.message.content ?? "";
+        setMessages((prev) =>
+          prev.map((currentMessage) =>
+            currentMessage.id === assistantId
+              ? { ...currentMessage, content: assistantContent }
+              : currentMessage,
+          ),
+        );
+        return;
       }
+
+      const toolMessages = toolCalls.reduce<ExtendedMessage[]>(
+        (accumulator, toolCall) => {
+          const toolName = toolCall.function.name as keyof typeof TOOL_REGISTRY;
+          const tool = TOOL_REGISTRY[toolName];
+          if (!tool) {
+            return accumulator;
+          }
+
+          const result = tool(
+            toolCall.function.arguments.a,
+            toolCall.function.arguments.b,
+          );
+
+          accumulator.push({
+            role: "tool",
+            id: crypto.randomUUID(),
+            tool_name: toolName,
+            content: String(result),
+          });
+
+          return accumulator;
+        },
+        [],
+      );
+
+      if (toolMessages.length === 0) {
+        setMessages((prev) =>
+          prev.map((currentMessage) =>
+            currentMessage.id === assistantId
+              ? {
+                  ...currentMessage,
+                  content: "I tried to call a tool, but none of the requested tools are available.",
+                }
+              : currentMessage,
+          ),
+        );
+        return;
+      }
+
+      setMessages((prev) => [...prev, ...toolMessages]);
+
+      const finalResponse = await ollama.chat({
+        model: "qwen3",
+        messages: [
+          { role: "system", content: "You are a helpful assistant" },
+          ...filteredMessages,
+          initialResponse.message,
+          ...toolMessages.map(({ role, content, tool_name }) => ({
+            role,
+            content,
+            tool_name,
+          })),
+        ],
+        stream: false,
+        options: {
+          temperature: 0.8,
+          num_predict: 2000,
+        },
+      });
+
+      const finalContent = finalResponse.message.content ?? "";
+      setMessages((prev) =>
+        prev.map((currentMessage) =>
+          currentMessage.id === assistantId
+            ? { ...currentMessage, content: finalContent }
+            : currentMessage,
+        ),
+      );
     } catch (err) {
       console.error({ err });
     } finally {
