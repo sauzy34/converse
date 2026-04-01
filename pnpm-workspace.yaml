@@ -1,0 +1,12 @@
+allowBuilds:
+  '@prisma/engines': true
+  msw: true
+  prisma: true
+  sharp: true
+  unrs-resolver: true
+blockExoticSubdeps: true
+minimumReleaseAge: 1440
+strictDepBuilds: true
+# no-downgrade trips often on transitive deps (e.g. undici-types, semver) when publish-time
+# provenance differs across versions; minimumReleaseAge + blockExoticSubdeps still apply.
+trustPolicy: off

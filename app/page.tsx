@@ -24,6 +24,8 @@ import {
 import { useState } from "react";
 import ollama, { Tool, type Message as OMessage } from "ollama/browser";
 import { truncateHistory } from "@/utils/truncateHistory";
+import { getGithubReposUrl } from "@/utils/getGithubReposUrl";
+import { useMutation } from "@tanstack/react-query";
 
 export interface ExtendedMessage extends OMessage {
   id: string;
@@ -31,56 +33,6 @@ export interface ExtendedMessage extends OMessage {
 }
 
 const MAX_TOKENS = 4000;
-
-function addTwoNumbers(a: number, b: number) {
-  return a + b;
-}
-
-function subTwoNumbers(a: number, b: number) {
-  return a - b;
-}
-
-async function getGithubReposUrl({ username }: { username: string }) {
-  console.log({ username });
-  const res = await fetch(
-    `https://api.github.com/users/${username}/repos?per_page=100&page=1`,
-  );
-  const repos = await res.json();
-  console.log({ urls: repos.map((r: any) => r.html_url) });
-  return repos.map((r: any) => r.html_url);
-}
-
-const addTool = {
-  type: "function",
-  function: {
-    name: "addTwoNumbers",
-    description: "Add two numbers together",
-    parameters: {
-      type: "object",
-      required: ["a", "b"],
-      properties: {
-        a: { type: "number", description: "The first number" },
-        b: { type: "number", description: "The second number" },
-      },
-    },
-  },
-} satisfies Tool;
-
-const subTool = {
-  type: "function",
-  function: {
-    name: "subTwoNumbers",
-    description: "Subtract two numbers together",
-    parameters: {
-      type: "object",
-      required: ["a", "b"],
-      properties: {
-        a: { type: "number", description: "The first number" },
-        b: { type: "number", description: "The second number" },
-      },
-    },
-  },
-} satisfies Tool;
 
 const githubTool = {
   type: "function",
@@ -98,21 +50,36 @@ const githubTool = {
 } satisfies Tool;
 
 const TOOL_REGISTRY = {
-  addTwoNumbers,
-  subTwoNumbers,
   getGithubReposUrl,
 } as const;
+
+type AddMessageVariables = { sessionId: string; content: string };
+
+const addMessage = async ({ sessionId, content }: AddMessageVariables) => {
+  const res = await fetch("/api/chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sessionId, role: "user", content }),
+  });
+  if (!res.ok) throw new Error("Failed");
+  return res.json();
+};
 
 export default function Home() {
   const [inputStatus, setInputStatus] =
     useState<PromptInputSubmitProps["status"]>("ready");
   const [messages, setMessages] = useState<ExtendedMessage[]>([]);
-  const [toolMessages, setToolMessages] = useState<ExtendedMessage[]>([]);
+  const { mutate } = useMutation({
+    mutationFn: addMessage,
+  });
 
   const handleSubmit = async (message: PromptInputMessage) => {
     const userId = crypto.randomUUID();
     const assistantId = crypto.randomUUID();
-
+    mutate({
+      sessionId: crypto.randomUUID(),
+      content: message.text,
+    });
     setInputStatus("streaming");
 
     const userMessage: ExtendedMessage = {
@@ -143,11 +110,10 @@ export default function Home() {
           temperature: 0.8,
           num_predict: 2000,
         },
-        tools: [addTool, subTool, githubTool],
+        tools: [githubTool],
       });
 
       const toolCalls = initialResponse.message.tool_calls ?? [];
-      console.log({ toolCalls });
       if (toolCalls.length === 0) {
         const assistantContent = initialResponse.message.content ?? "";
         setMessages((prev) =>
@@ -161,16 +127,19 @@ export default function Home() {
       }
 
       for (const tool of toolCalls) {
-        console.log({ tool });
         const fnName = tool.function.name;
         const args = tool.function.arguments;
-        const impl = TOOL_REGISTRY[fnName];
-        console.log({ fnName, args });
+        const impl =
+          fnName in TOOL_REGISTRY
+            ? TOOL_REGISTRY[fnName as keyof typeof TOOL_REGISTRY]
+            : undefined;
 
         let toolResult = "Tool not implemented";
 
         if (impl) {
-          const result = await impl(args);
+          const result = await impl(
+            args as Parameters<typeof getGithubReposUrl>[0],
+          );
           toolResult = JSON.stringify(result);
         }
         setMessages((prev) =>
@@ -216,7 +185,10 @@ export default function Home() {
               </PromptInputActionMenuContent>
             </PromptInputActionMenu>
           </PromptInputTools>
-          <PromptInputSubmit status={inputStatus} />
+          <PromptInputSubmit
+            status={inputStatus}
+            disabled={inputStatus === "streaming"}
+          />
         </PromptInputFooter>
       </PromptInput>
     </div>
