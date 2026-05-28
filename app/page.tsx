@@ -171,10 +171,15 @@ export default function Home() {
         let toolResult = "Tool not implemented";
 
         if (impl) {
-          const result = await impl(
-            args as Parameters<typeof getGithubReposUrl>[0],
-          );
-          toolResult = JSON.stringify(result);
+          try {
+            const result = await impl(
+              args as Parameters<typeof getGithubReposUrl>[0],
+            );
+            toolResult = JSON.stringify(result);
+          } catch (err) {
+            toolResult =
+              err instanceof Error ? err.message : "Tool execution failed";
+          }
         }
         setIsDone(false);
         setMessages((prev) =>
