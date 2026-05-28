@@ -21,15 +21,19 @@ import {
   PromptInputTextarea,
   PromptInputTools,
 } from "@/components/ai/prompt-input";
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import ollama, { Tool, type Message as OMessage } from "ollama/browser";
 import { truncateHistory } from "@/utils/truncateHistory";
 import { getGithubReposUrl } from "@/utils/getGithubReposUrl";
 import { useMutation } from "@tanstack/react-query";
+// import z from "zod";
+import { type SystemModelMessage } from "ai";
+import { Loader } from "@/components/ai/loader";
+import { Button } from "@/components/ui/button";
+import { PlusIcon } from "lucide-react";
 
 export interface ExtendedMessage extends OMessage {
   id: string;
-  role: "user" | "assistant" | "system" | "tool";
 }
 
 const MAX_TOKENS = 4000;
@@ -53,31 +57,50 @@ const TOOL_REGISTRY = {
   getGithubReposUrl,
 } as const;
 
-type AddMessageVariables = { sessionId: string; content: string };
+type AddMessageVariables = { sessionId: string; role: string; content: string };
 
-const addMessage = async ({ sessionId, content }: AddMessageVariables) => {
+const systemPrompt: SystemModelMessage = {
+  role: "system",
+  content:
+    "You are a helpful assistant." +
+    "You will find the github public repositories of the given username.",
+};
+
+const addMessage = async ({
+  sessionId,
+  role,
+  content,
+}: AddMessageVariables) => {
   const res = await fetch("/api/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ sessionId, role: "user", content }),
+    body: JSON.stringify({ sessionId, role, content }),
   });
   if (!res.ok) throw new Error("Failed");
   return res.json();
 };
 
 export default function Home() {
+  const [isDone, setIsDone] = useState(false);
   const [inputStatus, setInputStatus] =
     useState<PromptInputSubmitProps["status"]>("ready");
+  const [sessionId, setSessionId] = useState(() => crypto.randomUUID());
   const [messages, setMessages] = useState<ExtendedMessage[]>([]);
   const { mutate } = useMutation({
     mutationFn: addMessage,
   });
 
+  const handleNewChat = useCallback(() => {
+    setSessionId(crypto.randomUUID());
+    setMessages([]);
+  }, []);
+
   const handleSubmit = async (message: PromptInputMessage) => {
     const userId = crypto.randomUUID();
     const assistantId = crypto.randomUUID();
     mutate({
-      sessionId: crypto.randomUUID(),
+      sessionId,
+      role: "user",
       content: message.text,
     });
     setInputStatus("streaming");
@@ -99,13 +122,11 @@ export default function Home() {
     setMessages((prev) => [...prev, userMessage, assistantMessage]);
 
     try {
-      const initialResponse = await ollama.chat({
+      setIsDone(true);
+      const response = await ollama.chat({
         model: "qwen3",
-        messages: [
-          { role: "system", content: "You are a helpful assistant" },
-          ...filteredMessages,
-        ],
-        stream: false,
+        messages: [systemPrompt, ...filteredMessages],
+        stream: true,
         options: {
           temperature: 0.8,
           num_predict: 2000,
@@ -113,16 +134,29 @@ export default function Home() {
         tools: [githubTool],
       });
 
-      const toolCalls = initialResponse.message.tool_calls ?? [];
+      let fullContent = "";
+      const toolCalls: NonNullable<OMessage["tool_calls"]> = [];
+
+      for await (const chunk of response) {
+        if (chunk.message.content) {
+          fullContent += chunk.message.content;
+          setIsDone(false);
+          setMessages((prev) =>
+            prev.map((currentMessage) =>
+              currentMessage.id === assistantId
+                ? { ...currentMessage, content: fullContent }
+                : currentMessage,
+            ),
+          );
+        }
+        if (chunk.message.tool_calls?.length) {
+          toolCalls.push(...chunk.message.tool_calls);
+        }
+      }
+
       if (toolCalls.length === 0) {
-        const assistantContent = initialResponse.message.content ?? "";
-        setMessages((prev) =>
-          prev.map((currentMessage) =>
-            currentMessage.id === assistantId
-              ? { ...currentMessage, content: assistantContent }
-              : currentMessage,
-          ),
-        );
+        setIsDone(false);
+        mutate({ sessionId, role: "assistant", content: fullContent });
         return;
       }
 
@@ -142,6 +176,7 @@ export default function Home() {
           );
           toolResult = JSON.stringify(result);
         }
+        setIsDone(false);
         setMessages((prev) =>
           prev.map((currentMessage) =>
             currentMessage.id === assistantId
@@ -149,6 +184,7 @@ export default function Home() {
               : currentMessage,
           ),
         );
+        mutate({ sessionId, role: "tool", content: toolResult });
       }
     } catch (err) {
       console.error({ err });
@@ -159,13 +195,23 @@ export default function Home() {
 
   return (
     <div className="fixed inset-0 flex flex-col overflow-hidden px-4">
+      <div className="flex justify-end p-2">
+        <Button variant="outline" size="sm" onClick={handleNewChat}>
+          <PlusIcon className="size-4" />
+          New Chat
+        </Button>
+      </div>
       <Conversation className="relative size-full p-4">
         <ConversationContent>
           {messages.map((msg) => (
-            <Message from={msg?.role} key={msg?.id}>
+            <Message
+              from={msg?.role as "user" | "assistant" | "system"}
+              key={msg?.id}
+            >
               <MessageContent>{msg.content}</MessageContent>
             </Message>
           ))}
+          {isDone && <Loader size={16} />}
         </ConversationContent>
         <ConversationScrollButton />
       </Conversation>
